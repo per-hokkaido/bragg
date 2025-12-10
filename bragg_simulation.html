@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ブラッグ反射シミュレーション：完全版</title>
+    <style>
+        /* --- ベースレイアウト --- */
+        html, body {
+            width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
+            background-color: #0f172a; /* 深い紺色（宇宙・科学的な雰囲気） */
+            color: #fff;
+            font-family: "Helvetica Neue", Arial, sans-serif;
+        }
+
+        /* 全画面キャンバス */
+        canvas {
+            display: block; width: 100vw; height: 100vh;
+        }
+
+        /* --- UIパネル（右上にフロート表示） --- */
+        #ui-panel {
+            position: absolute;
+            top: 10px; right: 10px;
+            width: 320px;
+            max-height: 90vh;
+            overflow-y: auto;
+            background: rgba(15, 23, 42, 0.9); /* 半透明の背景 */
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            backdrop-filter: blur(8px);
+            color: #e2e8f0;
+            z-index: 100;
+        }
+
+        /* スマホ時は画面下部に固定 */
+        @media (max-width: 600px) {
+            #ui-panel {
+                top: auto; bottom: 0; right: 0; left: 0;
+                width: 100%; max-height: 50vh;
+                border-radius: 16px 16px 0 0;
+                border-left: none; border-right: none; border-bottom: none;
+            }
+        }
+
+        h2 {
+            margin: 0 0 12px 0; font-size: 1.1rem;
+            border-bottom: 2px solid #3b82f6; padding-bottom: 8px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+
+        /* 判定ボックス */
+        .status-box {
+            text-align: center; padding: 12px; border-radius: 8px; margin-bottom: 16px;
+            border: 2px solid transparent; transition: all 0.3s;
+        }
+        .status-box.ok { background: #064e3b; border-color: #10b981; color: #6ee7b7; }
+        .status-box.ng { background: #450a0a; border-color: #ef4444; color: #fca5a5; }
+        .status-main { font-weight: bold; font-size: 1.2rem; display: block; margin-bottom: 4px; }
+        .status-sub { font-size: 0.85rem; opacity: 0.9; font-family: monospace; }
+
+        /* コントロール行 */
+        .control-row { margin-bottom: 14px; }
+        label { display: flex; justify-content: space-between; font-size: 0.9rem; margin-bottom: 6px; font-weight: 500; }
+        .val { color: #60a5fa; font-family: monospace; font-size: 1rem; }
+
+        input[type="range"] {
+            width: 100%; height: 6px; background: #334155; border-radius: 3px;
+            outline: none; -webkit-appearance: none; cursor: pointer;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; width: 20px; height: 20px;
+            background: #fff; border: 2px solid #3b82f6; border-radius: 50%;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+        }
+
+        /* チェックボックス群 */
+        .toggles {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;
+        }
+        .chk-label {
+            display: flex; align-items: center; gap: 8px;
+            background: rgba(255,255,255,0.05); padding: 8px; border-radius: 6px;
+            font-size: 0.85rem; cursor: pointer;
+        }
+        input[type="checkbox"] { accent-color: #3b82f6; width: 16px; height: 16px; }
+
+        .legend {
+            margin-top: 16px; padding-top: 12px; border-top: 1px solid #334155;
+            font-size: 0.8rem; color: #94a3b8; line-height: 1.5;
+        }
+        .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+    </style>
+</head>
+<body>
+
+    <canvas id="simCanvas"></canvas>
+
+    <div id="ui-panel">
+        <h2>ブラッグ反射</h2>
+
+        <div id="status-box" class="status-box ng">
+            <span class="status-main" id="txt-status">弱め合う</span>
+            <span class="status-sub">
+                2d sinθ = <span id="val-path">0.0</span><br>
+                (λ = <span id="val-lam-disp">1.0</span>)
+            </span>
+        </div>
+
+        <div class="control-row">
+            <label>入射角 θ <span class="val" id="val-theta">30°</span></label>
+            <input type="range" id="in-theta" min="10" max="80" step="1" value="30">
+        </div>
+
+        <div class="control-row">
+            <label>原子間隔 d <span class="val" id="val-d">1.5</span></label>
+            <input type="range" id="in-d" min="1.2" max="3.0" step="0.1" value="1.5">
+        </div>
+
+        <div class="control-row">
+            <label>波長 λ <span class="val" id="val-lambda">1.0</span></label>
+            <input type="range" id="in-lambda" min="0.5" max="2.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="toggles">
+            <label class="chk-label">
+                <input type="checkbox" id="chk-wave" checked> 波を表示
+            </label>
+            <label class="chk-label">
+                <input type="checkbox" id="chk-peak" checked> 山(◎)を表示
+            </label>
+            <label class="chk-label">
+                <input type="checkbox" id="chk-comp" checked> 合成波を表示
+            </label>
+            <label class="chk-label">
+                <input type="checkbox" id="chk-slow"> スロー再生
+            </label>
+        </div>
+
+        <div class="legend">
+            <div><span class="dot" style="background:#fff; box-shadow:0 0 4px #fff;"></span>原子 (格子点)</div>
+            <div><span class="dot" style="background:transparent; border:2px solid #fff;"></span>波の山 (ピーク)</div>
+            <div><span class="dot" style="background:#f43f5e;"></span>合成波 (干渉結果)</div>
+            <div style="margin-top:4px; color:#cbd5e1;">※合成波が赤く大きく揺れる時が「反射」です。</div>
+        </div>
+    </div>
+
+<script>
+    // === 1. セットアップ ===
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // UI要素
+    const ui = {
+        theta: document.getElementById('in-theta'),
+        d: document.getElementById('in-d'),
+        lambda: document.getElementById('in-lambda'),
+        valTheta: document.getElementById('val-theta'),
+        valD: document.getElementById('val-d'),
+        valLambda: document.getElementById('val-lambda'),
+        valPath: document.getElementById('val-path'),
+        valLamDisp: document.getElementById('val-lam-disp'),
+        statusBox: document.getElementById('status-box'),
+        txtStatus: document.getElementById('txt-status'),
+        // チェックボックス
+        chkWave: document.getElementById('chk-wave'),
+        chkPeak: document.getElementById('chk-peak'),
+        chkComp: document.getElementById('chk-comp'),
+        chkSlow: document.getElementById('chk-slow')
+    };
+
+    // シミュレーション状態
+    const params = {
+        theta: 30, d: 1.5, lambda: 1.0,
+        showWave: true, showPeak: true, showComp: true, isSlow: false,
+        time: 0,
+        isConstructive: false
+    };
+
+    // === 2. イベント処理 ===
+    function updateParams() {
+        params.theta = parseFloat(ui.theta.value);
+        params.d = parseFloat(ui.d.value);
+        params.lambda = parseFloat(ui.lambda.value);
+        params.showWave = ui.chkWave.checked;
+        params.showPeak = ui.chkPeak.checked;
+        params.showComp = ui.chkComp.checked;
+        params.isSlow = ui.chkSlow.checked;
+
+        // 表示更新
+        ui.valTheta.textContent = params.theta;
+        ui.valD.textContent = params.d.toFixed(1);
+        ui.valLambda.textContent = params.lambda.toFixed(1);
+        ui.valLamDisp.textContent = params.lambda.toFixed(1);
+
+        // 干渉計算
+        const rad = params.theta * Math.PI / 180;
+        const pathDiff = 2 * params.d * Math.sin(rad);
+        ui.valPath.textContent = pathDiff.toFixed(2);
+
+        const ratio = pathDiff / params.lambda;
+        const n = Math.round(ratio);
+        const diff = Math.abs(ratio - n);
+
+        // 判定 (誤差許容 0.1)
+        if (diff < 0.1) {
+            ui.statusBox.className = "status-box ok";
+            ui.txtStatus.textContent = `強め合う (n=${n})`;
+            params.isConstructive = true;
+        } else {
+            ui.statusBox.className = "status-box ng";
+            ui.txtStatus.textContent = "弱め合う";
+            params.isConstructive = false;
+        }
+    }
+
+    // イベントリスナー登録
+    Object.values(ui).forEach(el => {
+        const eventType = (el.tagName === 'INPUT' && el.type === 'range') ? 'input' : 'change';
+        el.addEventListener(eventType, updateParams);
+    });
+    updateParams();
+
+    // リサイズ処理
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+
+    // === 3. 描画ループ ===
+    function loop() {
+        // 時間進行 (スロー時は遅く)
+        params.time += params.isSlow ? 0.02 : 0.1;
+
+        // 背景クリア (少し透明度を残して残像…は今回はせず、クリアにする)
+        ctx.fillStyle = "#0f172a"; 
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const w = canvas.width;
+        const h = canvas.height;
+        const cx = w / 2;
+        const cy = h / 2;
+
+        const scale = 60;
+        const dPx = params.d * scale;
+        const lamPx = params.lambda * scale;
+        const rad = params.theta * Math.PI / 180;
+
+        // --- 格子（原子）を描く ---
+        // 画面全体をカバー
+        const rowsUp = Math.ceil(cy / dPx) + 1;
+        const rowsDown = Math.ceil((h - cy) / dPx) + 1;
+        const cols = Math.ceil(w / 60) + 2;
+        const startX = (w % 60) / 2 - 60;
+
+        // 反射面となる2列
+        const row1 = 0;
+        const row2 = 1;
+
+        for (let r = -rowsUp; r <= rowsDown; r++) {
+            const y = cy + r * dPx - (dPx / 2); // 中心調整
+            const isRefPlane = (r === row1 || r === row2);
+
+            // グリッド線
+            ctx.beginPath();
+            ctx.moveTo(0, y); ctx.lineTo(w, y);
+            ctx.strokeStyle = "rgba(255,255,255,0.05)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            for (let c = 0; c < cols; c++) {
+                const x = startX + c * 60;
+                
+                ctx.beginPath();
+                ctx.arc(x, y, isRefPlane ? 5 : 3, 0, Math.PI*2);
+                
+                if (isRefPlane) {
+                    ctx.fillStyle = "#fff";
+                    ctx.shadowColor = "rgba(255,255,255,0.8)";
+                    ctx.shadowBlur = 10;
+                } else {
+                    ctx.fillStyle = "#475569";
+                    ctx.shadowBlur = 0;
+                }
+                ctx.fill();
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        // --- 波のシミュレーション ---
+        // 原子A (上), 原子B (下) の位置
+        // 反射点を画面中央より少し左に
+        const atomX = cx - w * 0.1; 
+        const atomAy = cy - dPx / 2;
+        const atomBy = cy + dPx / 2;
+
+        // ベクトル
+        const dx = Math.cos(rad);
+        const dy = Math.sin(rad); // y正が下
+        const L = w * 1.5; // 線の長さ
+
+        // 経路差 (幾何学計算)
+        const pathHalf = dPx * Math.sin(rad); // d sinθ
+        
+        // 経路差作図 (赤線)
+        const pX = atomX - dx * pathHalf;
+        const pY = atomBy - dy * pathHalf;
+        const qX = atomX + dx * pathHalf;
+        const qY = atomBy - dy * pathHalf;
+
+        // 作図表示
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "#ef4444";
+        ctx.beginPath();
+        ctx.moveTo(pX, pY); ctx.lineTo(atomX, atomBy); ctx.lineTo(qX, qY);
+        ctx.stroke();
+
+        // 文字
+        ctx.fillStyle = "#ef4444";
+        ctx.font = "12px sans-serif";
+        ctx.fillText("d sinθ", (pX + atomX)/2 - 20, (pY + atomBy)/2 + 20);
+
+        // --- 波の描画 ---
+        if (params.showWave) {
+            const k = 2 * Math.PI / lamPx;
+            const phase = params.time;
+
+            // 入射波A: 終点で phase になる
+            drawRay(atomX - dx*L, atomAy - dy*L, atomX, atomAy, lamPx, phase + k*L);
+            // 反射波A: 始点で phase
+            drawRay(atomX, atomAy, atomX + dx*L, atomAy - dy*L, lamPx, phase);
+
+            // 入射波B: P'点で phase になる（Aと波面を揃える）
+            // 入射B始点 -> P' の距離を L_dash とすると
+            // 始点位相 = phase + k * L_dash
+            // 実際の始点は atomX - dx*L. P'は atomX - dx*pathHalf.
+            // 距離差 = L - pathHalf.
+            // 始点位相 = phase + k * (L - pathHalf)
+            const startBx = atomX - dx*L;
+            const startBy = atomBy - dy*L;
+            const phaseStartB = phase + k * (L - pathHalf);
+
+            // Bの入射 (StartB -> AtomB)
+            // AtomBでの位相 = P'での位相(phase) から pathHalf 進むので遅れる => phase - k*pathHalf
+            drawRay(startBx, startBy, atomX, atomBy, lamPx, phaseStartB);
+
+            // 反射波B: 始点AtomBでの位相 phase - k*pathHalf
+            const phaseAtomB = phase - k * pathHalf;
+            drawRay(atomX, atomBy, atomX + dx*L, atomBy - dy*L, lamPx, phaseAtomB);
+
+
+            // --- 合成波 (干渉波) の表示 ---
+            if (params.showComp) {
+                // 反射波AとBの中間位置に描画
+                // 反射方向へある程度進んだ場所から描く
+                const off = 100;
+                const midX = atomX + dx * off;
+                const midY = (atomAy + atomBy) / 2 - dy * off;
+                const endX = atomX + dx * (L/1.5);
+                const endY = (atomAy + atomBy) / 2 - dy * (L/1.5);
+
+                // 干渉パラメータ
+                const delta = k * (2 * pathHalf); // 位相差 k * 2d sinθ
+                const ampFactor = Math.abs(Math.cos(delta / 2));
+                
+                // 色と太さ
+                const color = params.isConstructive ? "#f43f5e" : "rgba(244, 63, 94, 0.3)";
+                const width = params.isConstructive ? 4 : 2;
+
+                // 位相 (中間)
+                const phaseSum = phase - k * pathHalf; // 近似的な中間位相
+
+                // ガイド線
+                ctx.beginPath();
+                ctx.moveTo(midX, midY); ctx.lineTo(endX, endY);
+                ctx.strokeStyle = "rgba(255,255,255,0.1)";
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                // 合成波ラベル
+                ctx.fillStyle = color;
+                ctx.fillText("合成波", midX, midY - 10);
+
+                // 描画
+                drawSineLine(midX, midY, endX, endY, lamPx, phaseSum, color, width, ampFactor * 1.8);
+            }
+        }
+
+        requestAnimationFrame(loop);
+    }
+
+    // --- 描画ヘルパー ---
+    // 線と波を描く
+    function drawRay(x1, y1, x2, y2, lambda, startPhase) {
+        // 線（光線）
+        ctx.beginPath();
+        ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+        ctx.strokeStyle = "rgba(59, 130, 246, 0.3)"; // 薄い青
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // 波
+        drawSineLine(x1, y1, x2, y2, lambda, startPhase, "#3b82f6", 2, 1.0);
+
+        // ピーク（◎）
+        if (params.showPeak) {
+            const dx = x2 - x1; const dy = y2 - y1;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const angle = Math.atan2(dy, dx);
+            const k = 2 * Math.PI / lambda;
+
+            let r0 = (startPhase - Math.PI/2) / k;
+            r0 = r0 % lambda; if(r0 < 0) r0 += lambda;
+
+            for(let r=r0; r<=dist; r+=lambda) {
+                const px = x1 + r * Math.cos(angle); // 軸上
+                const py = y1 + r * Math.sin(angle);
+                
+                // 波の高さ分ずらす (sin=1なので振幅分)
+                const amp = 8;
+                const wx = px - amp * Math.sin(angle);
+                const wy = py + amp * Math.cos(angle);
+
+                ctx.beginPath();
+                ctx.arc(wx, wy, 4, 0, Math.PI*2);
+                ctx.strokeStyle = "#fff";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+        }
+    }
+
+    function drawSineLine(x1, y1, x2, y2, lambda, startPhase, color, width, ampScale) {
+        const dx = x2 - x1; const dy = y2 - y1;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        const angle = Math.atan2(dy, dx);
+        const k = 2 * Math.PI / lambda;
+        const amp = 8 * ampScale;
+
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        
+        // 3px刻みで描画
+        for(let r=0; r<=dist; r+=3) {
+            const val = amp * Math.sin(startPhase - k * r);
+            const px = x1 + r * Math.cos(angle) - val * Math.sin(angle);
+            const py = y1 + r * Math.sin(angle) + val * Math.cos(angle);
+            if(r===0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+    }
+
+    loop();
+
+</script>
+</body>
+</html>s
